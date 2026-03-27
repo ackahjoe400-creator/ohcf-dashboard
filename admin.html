@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Admin Dashboard</title>
+
+  <style>
+    body {
+      font-family: Arial;
+      background: #f4f6f9;
+      margin: 0;
+    }
+
+    header {
+      background: #2c3e50;
+      color: white;
+      padding: 15px;
+      text-align: center;
+      font-size: 22px;
+    }
+
+    .container {
+      padding: 20px;
+      max-width: 900px;
+      margin: auto;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    input, select, button {
+      padding: 10px;
+      margin-top: 10px;
+      width: 100%;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+    }
+
+    button {
+      background: #27ae60;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #219150;
+    }
+
+    .delete-btn {
+      background: red;
+      margin-top: 10px;
+    }
+
+    .delete-btn:hover {
+      background: darkred;
+    }
+
+    .item {
+      border-bottom: 1px solid #eee;
+      padding: 10px 0;
+    }
+
+    a {
+      color: blue;
+      text-decoration: none;
+    }
+
+#messages {
+  background: #f9f9f9;
+  padding: 15px;
+  border-radius: 10px;
+}
+
+.message-box {
+  background: white;
+  margin-bottom: 10px;
+  padding: 10px;
+  border-left: 5px solid #27ae60;
+  border-radius: 5px;
+}
+  </style>
+</head>
+
+<body>
+
+<header>
+  OHCF Admin Dashboard
+  <button id="logoutBtn" style="float: right; background: #e74c3c; border: none; color: white; padding: 8px 12px; border-radius: 5px; cursor: pointer; max-width: 100px;">Logout</button>
+</header>
+
+<div class="container">
+
+  <!-- Upload Section -->
+  <div class="card">
+    <h3>Upload Content</h3>
+
+    <form id="form">
+      <input type="text" id="title" placeholder="Enter Title" required>
+
+      <select id="category">
+        <option value="Weekly activities">Weekly Activities</option>
+        <option value="Major Programs">Major Programs</option>
+        <option value="Devotionals">Devotionals</option>
+        <option value="Bible Studies">Bible Studies</option>
+        <option value="Discipleship Materials">Discipleship Materials</option>
+        <option value="Christian Literature">Christian Literature</option>
+        <option value="Sermon">Sermon</option>
+      </select>
+
+      <input type="file" id="file" required>
+
+      <button type="submit" id="saveBtn">Upload</button>
+      <button type="button" id="cancelBtn" style="background-color: #95a5a6; display: none;">Cancel</button>
+    </form>
+  </div>
+
+  <!-- Content List -->
+   <section>
+  <div class="card">
+    <h3>All Content</h3>
+    <div id="contentList"></div>
+    </section>
+     <h2>📢 Add Announcement</h2>
+
+<input type="text" id="annTitle" placeholder="Title"><br><br>
+<textarea id="annMessage" placeholder="Write announcement..."></textarea><br><br>
+
+<button onclick="addAnnouncement()">Post Announcement</button>
+
+<h3>All Announcements</h3>
+<div id="announcementList"></div>
+
+  </div>
+  <!-- Messages Section -->
+  <div class="card">
+    <h3>Prayer Requests</h3>
+    <div id="messages"></div>
+    
+  </div>
+  <!-- Analytics Section -->
+  <div class="card">
+    <h3>Analytics</h3>
+    <canvas id="analyticsChart" width="400" height="200"></canvas>
+  </div>
+
+</div>
+
+<script>
+const API_URL = "http://localhost:5000/api/content";
+
+// Require login for admin dashboard
+if (localStorage.getItem('auth') !== 'true') {
+  window.location.href = 'login.html';
+}
+
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  localStorage.removeItem('auth');
+  window.location.href = 'login.html';
+});
+
+let editingId = null;
+
+const saveBtn = document.getElementById("saveBtn");
+const cancelBtn = document.getElementById("cancelBtn");
+
+// Upload / Update content
+document.getElementById("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const title = document.getElementById("title").value.trim();
+  const category = document.getElementById("category").value;
+  const file = document.getElementById("file").files[0];
+
+  if (!title) {
+    alert("Title is required.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("title", title);
+  formData.append("category", category);
+  if (file) formData.append("file", file);
+
+  const method = editingId ? "PUT" : "POST";
+  const url = editingId ? `${API_URL}/${editingId}` : API_URL;
+
+  const res = await fetch(url, {
+    method,
+    body: formData
+  });
+
+  if (!res.ok) {
+    alert(`Failed to ${editingId ? 'update' : 'upload'} content.`);
+    return;
+  }
+
+  alert(editingId ? "Updated successfully!" : "Uploaded successfully!");
+
+  resetForm();
+  loadContent();
+});
+
+cancelBtn.addEventListener("click", () => {
+  resetForm();
+});
+
+function resetForm() {
+  editingId = null;
+  document.getElementById("form").reset();
+  saveBtn.textContent = "Upload";
+  cancelBtn.style.display = "none";
+}
+
+// Load content
+async function loadContent() {
+  const res = await fetch(API_URL);
+  const data = await res.json();
+
+  const container = document.getElementById("contentList");
+  container.innerHTML = "";
+
+  data.forEach(item => {
+    const fileUrl = `http://localhost:5000/uploads/${item.file}`;
+
+    container.innerHTML += `
+      <div class="item">
+        <strong>${item.title}</strong><br>
+        <small>${item.category}</small><br>
+        <a href="${fileUrl}" target="_blank">View File</a>
+        <button class="update-btn" onclick="populateEdit('${item._id}', '${escapeHtml(item.title)}', '${escapeHtml(item.category)}')" style="margin-top:10px; background:#3498db;">Update</button>
+        <button class="delete-btn" onclick="deleteItem('${item._id}')">Delete</button>
+      </div>
+    `;
+  });
+}
+
+// Fill form for edit
+function populateEdit(id, title, category) {
+  editingId = id;
+  document.getElementById("title").value = unescapeHtml(title);
+  document.getElementById("category").value = unescapeHtml(category);
+  saveBtn.textContent = "Update";
+  cancelBtn.style.display = "inline-block";
+}
+
+// Delete content
+async function deleteItem(id) {
+  if (!confirm("Are you sure you want to delete?")) return;
+
+  const res = await fetch(`${API_URL}/${id}`, {
+    method: "DELETE"
+  });
+
+  if (!res.ok) {
+    alert("Delete failed.");
+    return;
+  }
+
+  alert("Deleted!");
+  loadContent();
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function unescapeHtml(value) {
+  return String(value)
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+// Load on page start
+loadContent();
+
+// ==========================
+// LOAD PRAYER REQUESTS
+// ==========================
+async function loadMessages() {
+  const res = await fetch("http://localhost:5000/api/contact");
+  const data = await res.json();
+
+  const container = document.getElementById("messages");
+  container.innerHTML = "";
+
+  data.forEach(msg => {
+    const div = document.createElement("div");
+    div.className = "message-box";
+    div.innerHTML = `
+      <strong>${msg.name}</strong><br>
+      <p>${msg.message}</p>
+      <small>${new Date(msg.createdAt).toLocaleString()}</small>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ==========================
+// LOAD ANALYTICS
+// ==========================
+async function loadAnalytics() {
+  const res = await fetch("http://localhost:5000/api/analytics");
+  const data = await res.json();
+
+  const labels = Object.keys(data.pages);
+  const values = Object.values(data.pages);
+
+  const ctx = document.getElementById("analyticsChart").getContext("2d");
+
+  new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: labels,
+      datasets: [{
+        label: "Page Visits",
+        data: values
+      }]
+    }
+  });
+}
+
+// ==========================
+// RUN FUNCTIONS
+// ==========================
+loadMessages();
+loadAnalytics();
+</script>
+
+<script>
+// ==========================
+// ADD ANNOUNCEMENT
+// ==========================
+async function addAnnouncement() {
+  const title = document.getElementById("annTitle").value;
+  const message = document.getElementById("annMessage").value;
+
+  const res = await fetch("http://localhost:5000/api/announcements", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ title, message })
+  });
+
+  if (res.ok) {
+    loadAnnouncements();
+    document.getElementById("annTitle").value = "";
+    document.getElementById("annMessage").value = "";
+  }
+}
+
+// ==========================
+// LOAD ANNOUNCEMENTS
+// ==========================
+async function loadAnnouncements() {
+  const res = await fetch("http://localhost:5000/api/announcements");
+  const data = await res.json();
+
+  const container = document.getElementById("announcementList");
+  container.innerHTML = "";
+
+  data.forEach(a => {
+    const div = document.createElement("div");
+    div.innerHTML = `
+      <strong>${a.title}</strong><br>
+      <p>${a.message}</p>
+
+      <button onclick="editAnnouncement('${a._id}', '${a.title}', \`${a.message}\`)">Edit</button>
+      <button onclick="deleteAnnouncement('${a._id}')">Delete</button>
+      <hr>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ==========================
+// DELETE
+// ==========================
+async function deleteAnnouncement(id) {
+  await fetch(`http://localhost:5000/api/announcements/${id}`, {
+    method: "DELETE"
+  });
+
+  loadAnnouncements();
+}
+
+// ==========================
+// EDIT
+// ==========================
+function editAnnouncement(id, oldTitle, oldMessage) {
+  const newTitle = prompt("Edit title:", oldTitle);
+  const newMessage = prompt("Edit message:", oldMessage);
+
+  if (!newTitle || !newMessage) return;
+
+  fetch(`http://localhost:5000/api/announcements/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      title: newTitle,
+      message: newMessage
+    })
+  }).then(() => loadAnnouncements());
+}
+
+// ==========================
+// LOAD ON START
+// ==========================
+loadAnnouncements();
+</script>
+
+</body>
+</html>
