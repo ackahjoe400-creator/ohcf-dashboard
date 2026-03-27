@@ -6,12 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Admin Login</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       display: flex;
       justify-content: center;
@@ -21,24 +16,16 @@
       font-family: 'Arial', system-ui, -apple-system, sans-serif;
       padding: 1rem;
     }
-
     .login-box {
       background: white;
       padding: 2rem;
       border-radius: 1rem;
       width: 100%;
       max-width: 360px;
-      box-shadow: 0 20px 35px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 20px 35px rgba(0,0,0,0.2);
       text-align: center;
-      transition: transform 0.2s ease;
     }
-
-    .login-box h2 {
-      margin-bottom: 1.5rem;
-      color: #2c3e50;
-      font-weight: 600;
-    }
-
+    .login-box h2 { margin-bottom: 1.5rem; color: #2c3e50; font-weight: 600; }
     input {
       width: 100%;
       padding: 0.75rem 1rem;
@@ -46,15 +33,12 @@
       border: 1px solid #ddd;
       border-radius: 0.5rem;
       font-size: 1rem;
-      transition: border-color 0.2s, box-shadow 0.2s;
     }
-
     input:focus {
       outline: none;
       border-color: #27ae60;
-      box-shadow: 0 0 0 3px rgba(39, 174, 96, 0.2);
+      box-shadow: 0 0 0 3px rgba(39,174,96,0.2);
     }
-
     button {
       width: 100%;
       padding: 0.75rem;
@@ -66,99 +50,78 @@
       font-size: 1rem;
       font-weight: bold;
       cursor: pointer;
-      transition: background 0.2s, transform 0.05s;
     }
-
-    button:hover {
-      background: #219653;
-    }
-
-    button:active {
-      transform: scale(0.98);
-    }
-
-    #error {
-      margin-top: 1rem;
-      font-size: 0.9rem;
-      min-height: 2rem;
-    }
+    button:hover { background: #219653; }
+    button:active { transform: scale(0.98); }
+    #error { margin-top: 1rem; font-size: 0.9rem; min-height: 2rem; color: #e74c3c; }
   </style>
 </head>
 <body>
-<div class="login-box">
-  <h2>Admin Login</h2>
-  <form id="loginForm">
-    <input type="password" id="password" placeholder="Enter admin password" autocomplete="off" required>
-    <button type="submit" id="loginBtn">Login</button>
-    <p id="error" style="color: #e74c3c;"></p>
-  </form>
-</div>
+  <div class="login-box">
+    <h2>Admin Login</h2>
+    <form id="loginForm">
+      <input type="password" id="password" placeholder="Enter admin password" autocomplete="off" required>
+      <button type="submit" id="loginBtn">Login</button>
+      <p id="error"></p>
+    </form>
+  </div>
 
-<script>
-  (function() {
-    // If already logged in, redirect to admin panel
-    if (localStorage.getItem('auth') === 'true') {
-      window.location.href = 'admin.html';
-      return;
-    }
+  <script>
+    (function() {
+      const form = document.getElementById('loginForm');
+      const passwordInput = document.getElementById('password');
+      const errorEl = document.getElementById('error');
+      const loginBtn = document.getElementById('loginBtn');
 
-    const form = document.getElementById('loginForm');
-    const passwordInput = document.getElementById('password');
-    const errorEl = document.getElementById('error');
-    const loginBtn = document.getElementById('loginBtn');
-
-    async function handleLogin(event) {
-      event.preventDefault();
-
-      const password = passwordInput.value.trim();
-      if (!password) {
-        errorEl.textContent = 'Please enter the password.';
+      // Redirect if already logged in
+      if (localStorage.getItem('auth') === 'true') {
+        window.location.href = 'admin.html';
         return;
       }
 
-      // Disable button and show loading state
-      loginBtn.disabled = true;
-      loginBtn.textContent = 'Logging in...';
-      errorEl.textContent = '';
-
-      try {
-        const response = await fetch('http://localhost:5000/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password })
-        });
-
-        // Handle non-2xx HTTP responses gracefully
-        if (!response.ok) {
-          throw new Error(`Server error: ${response.status}`);
+      async function handleLogin(event) {
+        event.preventDefault();
+        const password = passwordInput.value.trim();
+        if (!password) {
+          errorEl.textContent = 'Please enter the password.';
+          return;
         }
 
-        const data = await response.json();
+        loginBtn.disabled = true;
+        loginBtn.textContent = 'Logging in...';
+        errorEl.textContent = '';
 
-        if (data.success) {
-          localStorage.setItem('auth', 'true');
-          window.location.href = 'admin.html';
-        } else {
-          errorEl.textContent = 'Wrong password!';
-          passwordInput.value = '';
-          passwordInput.focus();
+        try {
+          // ✅ Use relative path for deployment compatibility
+          const response = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password })
+          });
+
+          if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+          const data = await response.json();
+          if (data.success) {
+            localStorage.setItem('auth', 'true');
+            window.location.href = 'admin.html';
+          } else {
+            errorEl.textContent = 'Wrong password!';
+            passwordInput.value = '';
+            passwordInput.focus();
+          }
+        } catch (err) {
+          console.error('Login error:', err);
+          errorEl.textContent = 'Connection error. Please try again later.';
+        } finally {
+          loginBtn.disabled = false;
+          loginBtn.textContent = 'Login';
         }
-      } catch (err) {
-        console.error('Login error:', err);
-        errorEl.textContent = 'Connection error. Please try again later.';
-      } finally {
-        loginBtn.disabled = false;
-        loginBtn.textContent = 'Login';
       }
-    }
 
-    form.addEventListener('submit', handleLogin);
-
-    // Clear error when user starts typing
-    passwordInput.addEventListener('input', () => {
-      if (errorEl.textContent) errorEl.textContent = '';
-    });
-  })();
-</script>
+      form.addEventListener('submit', handleLogin);
+      passwordInput.addEventListener('input', () => { errorEl.textContent = ''; });
+    })();
+  </script>
 </body>
 </html>
