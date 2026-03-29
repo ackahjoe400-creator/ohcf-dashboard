@@ -48,7 +48,7 @@ app.post('/api/login', (req, res) => {
 });
 
 // ===============================
-// 📚 CONTENT ROUTES (e.g., Weekly Activities, Major Programs)
+// 📚 CONTENT ROUTES
 // ===============================
 
 // GET all content
@@ -57,147 +57,178 @@ app.get('/api/content', async (req, res) => {
     .from('contents')
     .select('*')
     .order('created_at', { ascending: false });
-  if (error) {
-    console.error('Supabase select error:', error);
-    return res.status(500).json({ error: error.message });
-  }
+
+  if (error) return res.status(500).json({ error: error.message });
+
   res.json(data);
 });
+
 
 // POST new content (with file upload)
 app.post('/api/content', upload.single('file'), async (req, res) => {
-  const { title, category } = req.body;
-  if (!title || !category || !req.file) {
-    return res.status(400).json({ message: 'Title, category, and file required' });
-  }
+  try {
+    const { title, category } = req.body;
 
-  // Upload file to Supabase Storage bucket "downloads"
-  const fileExt = path.extname(req.file.originalname);
-  const filePath = `content/${Date.now()}-${Math.round(Math.random() * 1e9)}${fileExt}`;
-  const { data: uploadData, error: uploadError } = await supabase.storage
-    .from('downloads')
-    .upload(filePath, req.file.buffer, {
-      contentType: req.file.mimetype,
-      cacheControl: '3600'
-    });
-  if (uploadError) {
-    console.error('Supabase storage upload error:', uploadError);
-    return res.status(500).json({ error: uploadError.message });
-  }
+    // Validate input
+    if (!title || !category || !req.file) {
+      return res.status(400).json({ message: 'Title, category, and file required' });
+    }
 
-  // Get public URL
-  const { publicURL } = supabase.storage.from('downloads').getPublicUrl(filePath);
-
-  // Insert into "contents" table
-  const { data, error } = await supabase
-    .from('contents')
-    .insert([{ title, category, file_url: publicURL, file_name: req.file.originalname }])
-    .select()
-    .single();
-  if (error) {
-    console.error('Supabase insert error:', error);
-    return res.status(500).json({ error: error.message });
-  }
-  res.json(data);
-});
-
-// UPDATE content (with optional new file)
-app.put('/api/content/:id', upload.single('file'), async (req, res) => {
-  const { id } = req.params;
-  const { title, category } = req.body;
-
-  // Get existing record to delete old file if replacing
-  const { data: existing, error: fetchError } = await supabase
-    .from('contents')
-    .select('file_url')
-    .eq('_id', id)
-    .single();
-  if (fetchError && fetchError.code !== 'PGRST116') { // not found is okay
-    console.error('Fetch existing error:', fetchError);
-    return res.status(500).json({ error: fetchError.message });
-  }
-
-  let newFileUrl = existing?.file_url;
-  if (req.file) {
-    // Upload new file
+    // Create unique file path
     const fileExt = path.extname(req.file.originalname);
     const filePath = `content/${Date.now()}-${Math.round(Math.random() * 1e9)}${fileExt}`;
-    const { data: uploadData, error: uploadError } = await supabase.storage
+
+    // Upload file to Supabase Storage (downloads bucket)
+    const { error: uploadError } = await supabase.storage
       .from('downloads')
       .upload(filePath, req.file.buffer, {
         contentType: req.file.mimetype,
-        cacheControl: '3600'
+        cacheControl: '3600',
+        upsert: false
       });
+
     if (uploadError) {
-      console.error('Upload error:', uploadError);
+      console.error("Upload error:", uploadError);
       return res.status(500).json({ error: uploadError.message });
     }
-    const { publicURL } = supabase.storage.from('downloads').getPublicUrl(filePath);
-    newFileUrl = publicURL;
 
-    // Delete old file from storage if it exists
-    if (existing?.file_url) {
-      const oldPath = existing.file_url.split('/downloads/')[1];
-      if (oldPath) {
-        await supabase.storage.from('downloads').remove([oldPath]);
+    // Get public URL
+    const { data } = supabase.storage.from('downloads').getPublicUrl(filePath);
+    const publicURL = data.publicUrl;
+
+    // ✅ INSERT INTO DATABASE (THIS IS YOUR LINE)
+    const { data: dbData, error: dbError } = await supabase
+      .from('contents')
+      .insert([
+        {
+          title,
+          category,
+          file_url: publicURL,
+          file_path: filePath,
+          file_name: req.file.originalname
+        }
+      ])
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error("DB insert error:", dbError);
+      return res.status(500).json({ error: dbError.message });
+    }
+
+    res.json(dbData);
+
+  } catch (err) {
+    console.error('POST /content error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+// UPDATE content (optional new file)
+app.put('/api/content/:id', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, category } = req.body;
+
+    const { data: existing, error: fetchError } = await supabase
+      .from('contents')
+      .select('file_url,file_path,title,category')
+      .eq('_id', id)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      return res.status(500).json({ error: fetchError.message });
+    }
+
+    let newFileUrl = existing?.file_url;
+    let newFilePath = existing?.file_path;
+
+    // If new file uploaded
+    if (req.file) {
+      const fileExt = path.extname(req.file.originalname);
+      const filePath = `content/${Date.now()}-${Math.round(Math.random() * 1e9)}${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('downloads')
+        .upload(filePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          cacheControl: '3600'
+        });
+
+      if (uploadError) return res.status(500).json({ error: uploadError.message });
+
+      const { data } = supabase.storage.from('downloads').getPublicUrl(filePath);
+      newFileUrl = data.publicUrl;
+      newFilePath = filePath;
+
+      // Delete old file
+      if (existing?.file_path) {
+        await supabase.storage.from('downloads').remove([existing.file_path]);
       }
     }
-  }
 
-  // Update record
-  const { data, error } = await supabase
-    .from('contents')
-    .update({
-      title: title || existing?.title,
-      category: category || existing?.category,
-      file_url: newFileUrl,
-      updated_at: new Date()
-    })
-    .eq('_id', id)
-    .select()
-    .single();
-  if (error) {
-    console.error('Update error:', error);
-    return res.status(500).json({ error: error.message });
+    const { data: updated, error: updateError } = await supabase
+      .from('contents')
+      .update({
+        title: title || existing?.title,
+        category: category || existing?.category,
+        file_url: newFileUrl,
+        file_path: newFilePath,
+        updated_at: new Date()
+      })
+      .eq('_id', id)
+      .select()
+      .single();
+
+    if (updateError) return res.status(500).json({ error: updateError.message });
+
+    res.json(updated);
+
+  } catch (err) {
+    console.error('PUT /content/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
-  res.json(data);
 });
+
 
 // DELETE content
 app.delete('/api/content/:id', async (req, res) => {
-  const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-  // Get the file URL to delete the storage object
-  const { data: existing, error: fetchError } = await supabase
-    .from('contents')
-    .select('file_url')
-    .eq('_id', id)
-    .single();
-  if (fetchError && fetchError.code !== 'PGRST116') {
-    console.error('Fetch error:', fetchError);
-    return res.status(500).json({ error: fetchError.message });
-  }
+    const { data: existing, error: fetchError } = await supabase
+      .from('contents')
+      .select('file_path')
+      .eq('_id', id)
+      .single();
 
-  // Delete from database
-  const { error: deleteError } = await supabase
-    .from('contents')
-    .delete()
-    .eq('_id', id);
-  if (deleteError) {
-    console.error('Delete error:', deleteError);
-    return res.status(500).json({ error: deleteError.message });
-  }
-
-  // Delete file from storage if exists
-  if (existing?.file_url) {
-    const oldPath = existing.file_url.split('/downloads/')[1];
-    if (oldPath) {
-      await supabase.storage.from('downloads').remove([oldPath]);
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      return res.status(500).json({ error: fetchError.message });
     }
-  }
 
-  res.json({ success: true });
+    // Delete DB record
+    const { error: deleteError } = await supabase
+      .from('contents')
+      .delete()
+      .eq('_id', id);
+
+    if (deleteError) return res.status(500).json({ error: deleteError.message });
+
+    // Delete file from storage
+    if (existing?.file_path) {
+      await supabase.storage.from('downloads').remove([existing.file_path]);
+    }
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error('DELETE /content/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+module.exports = app;  
 
 // ===============================
 // 🙏 CONTACT / PRAYER REQUEST (using existing 'prayer_requests' table)
