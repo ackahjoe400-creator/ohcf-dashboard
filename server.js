@@ -1,10 +1,15 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 
 const app = express();
+
+// ===============================
+// 🚀 SUPABASE CLIENT
+// ===============================
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 // ===============================
 // 🚀 MIDDLEWARE
@@ -16,7 +21,7 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 // ===============================
-// 📊 ANALYTICS SYSTEM
+// 📊 ANALYTICS SYSTEM (in‑memory, optional)
 // ===============================
 let analytics = { totalVisits: 0, pages: {} };
 app.use((req, res, next) => {
@@ -28,37 +33,13 @@ app.use((req, res, next) => {
 });
 
 // ===============================
-// 📂 FILE UPLOAD SETUP
+// 📂 FILE UPLOAD SETUP (multer – in‑memory for Supabase)
 // ===============================
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-app.use('/uploads', express.static(UPLOAD_DIR));
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, `${unique}${ext}`);
-  }
-});
-
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ===============================
-// 📦 DATA STORAGE
-// ===============================
-let contents = [];
-let messages = [];
-let announcements = [];
-
-function generateId() {
-  return Math.random().toString(36).substring(2, 12);
-}
-
-// ===============================
-// 🔐 LOGIN
+// 🔐 LOGIN (unchanged)
 // ===============================
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
@@ -67,126 +48,260 @@ app.post('/api/login', (req, res) => {
 });
 
 // ===============================
-// 📚 CONTENT ROUTES
+// 📚 CONTENT ROUTES (e.g., Weekly Activities, Major Programs)
 // ===============================
-app.get('/api/content', (req, res) => res.json(contents));
 
-app.post('/api/content', upload.single('file'), (req, res) => {
+// GET all content
+app.get('/api/content', async (req, res) => {
+  const { data, error } = await supabase
+    .from('contents')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('Supabase select error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
+});
+
+// POST new content (with file upload)
+app.post('/api/content', upload.single('file'), async (req, res) => {
   const { title, category } = req.body;
-  if (!title || !category || !req.file) return res.status(400).json({ message: 'Title, category, and file required' });
+  if (!title || !category || !req.file) {
+    return res.status(400).json({ message: 'Title, category, and file required' });
+  }
 
-  const uniqueCategories = ['Weekly Activities', 'Major Programs'];
-  let item;
+  // Upload file to Supabase Storage bucket "downloads"
+  const fileExt = path.extname(req.file.originalname);
+  const filePath = `content/${Date.now()}-${Math.round(Math.random() * 1e9)}${fileExt}`;
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from('downloads')
+    .upload(filePath, req.file.buffer, {
+      contentType: req.file.mimetype,
+      cacheControl: '3600'
+    });
+  if (uploadError) {
+    console.error('Supabase storage upload error:', uploadError);
+    return res.status(500).json({ error: uploadError.message });
+  }
 
-  if (uniqueCategories.includes(category)) {
-    item = contents.find(c => c.category === category && c.title === title);
-    if (!item) item = contents.find(c => c.category === category);
+  // Get public URL
+  const { publicURL } = supabase.storage.from('downloads').getPublicUrl(filePath);
 
-    if (item) {
-      if (item.file) fs.existsSync(path.join(UPLOAD_DIR, item.file)) && fs.unlinkSync(path.join(UPLOAD_DIR, item.file));
-      item.title = title;
-      item.category = category;
-      item.file = req.file.filename;
-      item.updatedAt = new Date();
-      return res.json(item);
+  // Insert into "contents" table
+  const { data, error } = await supabase
+    .from('contents')
+    .insert([{ title, category, file_url: publicURL, file_name: req.file.originalname }])
+    .select()
+    .single();
+  if (error) {
+    console.error('Supabase insert error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
+});
+
+// UPDATE content (with optional new file)
+app.put('/api/content/:id', upload.single('file'), async (req, res) => {
+  const { id } = req.params;
+  const { title, category } = req.body;
+
+  // Get existing record to delete old file if replacing
+  const { data: existing, error: fetchError } = await supabase
+    .from('contents')
+    .select('file_url')
+    .eq('_id', id)
+    .single();
+  if (fetchError && fetchError.code !== 'PGRST116') { // not found is okay
+    console.error('Fetch existing error:', fetchError);
+    return res.status(500).json({ error: fetchError.message });
+  }
+
+  let newFileUrl = existing?.file_url;
+  if (req.file) {
+    // Upload new file
+    const fileExt = path.extname(req.file.originalname);
+    const filePath = `content/${Date.now()}-${Math.round(Math.random() * 1e9)}${fileExt}`;
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('downloads')
+      .upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        cacheControl: '3600'
+      });
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return res.status(500).json({ error: uploadError.message });
+    }
+    const { publicURL } = supabase.storage.from('downloads').getPublicUrl(filePath);
+    newFileUrl = publicURL;
+
+    // Delete old file from storage if it exists
+    if (existing?.file_url) {
+      const oldPath = existing.file_url.split('/downloads/')[1];
+      if (oldPath) {
+        await supabase.storage.from('downloads').remove([oldPath]);
+      }
     }
   }
 
-  item = { _id: generateId(), title, category, file: req.file.filename, createdAt: new Date() };
-  contents.push(item);
-  res.json(item);
+  // Update record
+  const { data, error } = await supabase
+    .from('contents')
+    .update({
+      title: title || existing?.title,
+      category: category || existing?.category,
+      file_url: newFileUrl,
+      updated_at: new Date()
+    })
+    .eq('_id', id)
+    .select()
+    .single();
+  if (error) {
+    console.error('Update error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
 });
 
-app.put('/api/content/:id', upload.single('file'), (req, res) => {
-  const id = req.params.id;
-  const { title, category } = req.body;
-  const item = contents.find(c => c._id === id);
-  if (!item) return res.status(404).json({ message: 'Not found' });
+// DELETE content
+app.delete('/api/content/:id', async (req, res) => {
+  const { id } = req.params;
 
-  if (title) item.title = title;
-  if (category) item.category = category;
-
-  if (req.file) {
-    if (item.file) fs.existsSync(path.join(UPLOAD_DIR, item.file)) && fs.unlinkSync(path.join(UPLOAD_DIR, item.file));
-    item.file = req.file.filename;
+  // Get the file URL to delete the storage object
+  const { data: existing, error: fetchError } = await supabase
+    .from('contents')
+    .select('file_url')
+    .eq('_id', id)
+    .single();
+  if (fetchError && fetchError.code !== 'PGRST116') {
+    console.error('Fetch error:', fetchError);
+    return res.status(500).json({ error: fetchError.message });
   }
 
-  res.json(item);
-});
+  // Delete from database
+  const { error: deleteError } = await supabase
+    .from('contents')
+    .delete()
+    .eq('_id', id);
+  if (deleteError) {
+    console.error('Delete error:', deleteError);
+    return res.status(500).json({ error: deleteError.message });
+  }
 
-app.delete('/api/content/:id', (req, res) => {
-  const id = req.params.id;
-  const index = contents.findIndex(c => c._id === id);
-  if (index === -1) return res.status(404).json({ message: 'Not found' });
+  // Delete file from storage if exists
+  if (existing?.file_url) {
+    const oldPath = existing.file_url.split('/downloads/')[1];
+    if (oldPath) {
+      await supabase.storage.from('downloads').remove([oldPath]);
+    }
+  }
 
-  const [removed] = contents.splice(index, 1);
-  if (removed.file) fs.existsSync(path.join(UPLOAD_DIR, removed.file)) && fs.unlinkSync(path.join(UPLOAD_DIR, removed.file));
   res.json({ success: true });
 });
 
 // ===============================
-// 🙏 CONTACT / PRAYER REQUEST
+// 🙏 CONTACT / PRAYER REQUEST (using existing 'prayer_requests' table)
 // ===============================
-app.post('/api/contact', (req, res) => {
+app.post('/api/contact', async (req, res) => {
   const { name, message } = req.body;
   if (!message) return res.status(400).json({ message: 'Message is required' });
 
-  const newMessage = { _id: generateId(), name: name || 'Anonymous', message, createdAt: new Date() };
-  messages.push(newMessage);
+  const { error } = await supabase
+    .from('prayer_requests')
+    .insert([{ name: name || 'Anonymous', message }]);
+  if (error) {
+    console.error('Insert prayer request error:', error);
+    return res.status(500).json({ error: error.message });
+  }
   res.json({ success: true, message: 'Message sent successfully' });
 });
 
-app.get('/api/contact', (req, res) => res.json(messages));
+app.get('/api/contact', async (req, res) => {
+  const { data, error } = await supabase
+    .from('prayer_requests')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('Select prayer requests error:', error);
+    return res.status(500).json([]);
+  }
+  res.json(data);
+});
 
 // ===============================
-// 📊 ANALYTICS ROUTE
+// 📊 ANALYTICS ROUTE (in‑memory, optional)
 // ===============================
 app.get('/api/analytics', (req, res) => res.json(analytics));
 
 // ===============================
-// 📢 ANNOUNCEMENTS
+// 📢 ANNOUNCEMENTS (using existing 'announcements' table with 'content' column)
 // ===============================
-app.get('/api/announcements', (req, res) => res.json(announcements));
+app.get('/api/announcements', async (req, res) => {
+  const { data, error } = await supabase
+    .from('announcements')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('Select announcements error:', error);
+    return res.status(500).json([]);
+  }
+  res.json(data);
+});
 
-app.post('/api/announcements', (req, res) => {
-  const { title, message } = req.body;
+app.post('/api/announcements', async (req, res) => {
+  const { title, message } = req.body; // frontend sends 'message'
   if (!title || !message) return res.status(400).json({ message: 'Title and message required' });
 
-  const newAnnouncement = { _id: generateId(), title, message, createdAt: new Date() };
-  announcements.unshift(newAnnouncement);
-  res.json(newAnnouncement);
+  // Map frontend 'message' to table column 'content'
+  const { data, error } = await supabase
+    .from('announcements')
+    .insert([{ title, content: message }])
+    .select()
+    .single();
+  if (error) {
+    console.error('Insert announcement error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
 });
 
-app.put('/api/announcements/:id', (req, res) => {
-  const id = req.params.id;
+app.put('/api/announcements/:id', async (req, res) => {
+  const { id } = req.params;
   const { title, message } = req.body;
-  const item = announcements.find(a => a._id === id);
-  if (!item) return res.status(404).json({ message: 'Not found' });
 
-  if (title) item.title = title;
-  if (message) item.message = message;
-  item.updatedAt = new Date();
-  res.json(item);
+  const { data, error } = await supabase
+    .from('announcements')
+    .update({ title, content: message, updated_at: new Date() })
+    .eq('id', id)  // note: your table uses 'id', not '_id'
+    .select()
+    .single();
+  if (error) {
+    console.error('Update announcement error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  res.json(data);
 });
 
-app.delete('/api/announcements/:id', (req, res) => {
-  const id = req.params.id;
-  const index = announcements.findIndex(a => a._id === id);
-  if (index === -1) return res.status(404).json({ message: 'Not found' });
-  announcements.splice(index, 1);
+app.delete('/api/announcements/:id', async (req, res) => {
+  const { id } = req.params;
+  const { error } = await supabase
+    .from('announcements')
+    .delete()
+    .eq('id', id);
+  if (error) {
+    console.error('Delete announcement error:', error);
+    return res.status(500).json({ error: error.message });
+  }
   res.json({ success: true });
 });
 
 // ===============================
-// 🔑 FRONTEND ROUTES
+// 🔑 FRONTEND ROUTES (unchanged)
 // ===============================
-
-// Serve admin.html at root
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
-// Serve login.html at /login
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'login.html'));
 });
