@@ -47,7 +47,7 @@ app.post('/api/login', (req, res) => {
   res.json({ success: password === validPassword });
 });
 
-// ===============================
+  // ===============================
 // 📚 CONTENT ROUTES
 // ===============================
 
@@ -67,11 +67,11 @@ app.get('/api/content', async (req, res) => {
 // POST new content (with file upload)
 app.post('/api/content', upload.single('file'), async (req, res) => {
   try {
-    const { title, category } = req.body;
+    const { title, } = req.body;
 
     // Validate input
-    if (!title || !category || !req.file) {
-      return res.status(400).json({ message: 'Title, category, and file required' });
+    if (!title || !req.file) {
+      return res.status(400).json({ message: 'Title and file required' });
     }
 
     // Create unique file path
@@ -102,7 +102,6 @@ app.post('/api/content', upload.single('file'), async (req, res) => {
       .insert([
         {
           title,
-          category,
           file_url: publicURL,
           file_path: filePath,
           file_name: req.file.originalname
@@ -129,11 +128,11 @@ app.post('/api/content', upload.single('file'), async (req, res) => {
 app.put('/api/content/:id', upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, category } = req.body;
+    const { title, } = req.body;
 
     const { data: existing, error: fetchError } = await supabase
       .from('contents')
-      .select('file_url,file_path,title,category')
+      .select('file_url,file_path,title')
       .eq('_id', id)
       .single();
 
@@ -172,7 +171,6 @@ app.put('/api/content/:id', upload.single('file'), async (req, res) => {
       .from('contents')
       .update({
         title: title || existing?.title,
-        category: category || existing?.category,
         file_url: newFileUrl,
         file_path: newFilePath,
         updated_at: new Date()
@@ -226,9 +224,7 @@ app.delete('/api/content/:id', async (req, res) => {
     console.error('DELETE /content/:id error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
-
-module.exports = app;  
+});  
 
 // ===============================
 // 🙏 CONTACT / PRAYER REQUEST (using existing 'prayer_requests' table)
