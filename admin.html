@@ -252,18 +252,18 @@ async function loadAnnouncements() {
   container.innerHTML = "";
   data.forEach(a => {
     const div = document.createElement("div");
-    div.innerHTML = `<strong>${a.title}</strong><br><p>${a.text}</p>
-      <button onclick="editAnnouncement('${a._id}', '${a.title}', \`${a.text}\`)">Edit</button>
+    div.innerHTML = `<strong>${a.title}</strong><br><p>${a.content}</p>
+      <button onclick="editAnnouncement('${a._id}', '${a.title}', \`${a.content}\`)">Edit</button>
       <button onclick="deleteAnnouncement('${a._id}')">Delete</button><hr>`;
     container.appendChild(div);
   });
 }
 async function deleteAnnouncement(id) { await fetch(`${API_ANN}/${id}`, { method: "DELETE" }); loadAnnouncements(); }
-function editAnnouncement(id, oldTitle, oldText) {
+function editAnnouncement(id, oldTitle, oldContent) {
   const newTitle = prompt("Edit title:", oldTitle);
-  const newText = prompt("Edit Text:", oldText);
-  if (!newTitle || !newText) return;
-  fetch(`${API_ANN}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: newTitle, Text: newText }) }).then(() => loadAnnouncements());
+  const newContent = prompt("Edit content:", oldContent);
+  if (!newTitle || !newContent) return;
+  fetch(`${API_ANN}/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: newTitle, Text: newContent }) }).then(() => loadAnnouncements());
 }
 loadAnnouncements();
 </script>
